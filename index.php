@@ -18,23 +18,26 @@ if (isset($_GET['create_token'])) {
     echo json_encode($oObj);
 } else if (isset($_GET['query'])) {
     $szToken = $_GET['query'];
-    $eFlag = $oStorage->RetrieveFlag($szToken);
+    $oFlag = $oStorage->RetrieveFlag($szToken);
     $oObj = new stdClass;
-    if ($eFlag === STATUS_NONEXISTENT) {
+    if ($oFlag === false) {
         $oObj->status = "Error";
         $oObj->error = "Token does not exist";
     } else {
         $oObj->status = "OK";
         $oObj->error = "";
-        switch ($eFlag) {
+        switch ($oFlag->status) {
             case STATUS_NOT_FLAGGED: $oObj->flagged = "NOT_FLAGGED"; break;
-            case STATUS_FLAGGED: $oObj->flagged = "FLAGGED"; break;
+            case STATUS_FLAGGED:
+                $oObj->flagged = "FLAGGED";
+                $oObj->ip = $oFlag->ip;
+                break;
         }
     }
     echo json_encode($oObj);
 } else if (isset($_GET['flag'])) {
     $szToken = $_GET['flag'];
-    $oStorage->FlagToken($szToken);
+    $oStorage->FlagToken($szToken, $_SERVER['REMOTE_ADDR']);
     $oObj = new stdClass;
     $oObj->status = "OK";
     $oObj->error = "";

@@ -17,9 +17,11 @@ class SqliteTokenStorage implements ITokenStorage {
 	            "`token`	TEXT NOT NULL UNIQUE," .
 	            "`status`	INTEGER NOT NULL," .
 	            "`expiry`	INTEGER NOT NULL," .
+	            "`ip`		TEXT," .
 	            "PRIMARY KEY(`token`)" .
             ");"
         );
+        @$this->hSqlite->query("ALTER TABLE `tokens` ADD COLUMN `ip` TEXT;");
         $this->hSqlite->query("CREATE UNIQUE INDEX IF NOT EXISTS `token_index` ON `tokens` (`token`);");
         $this->hSqlite->query("CREATE INDEX IF NOT EXISTS `expiry_index` ON `tokens` (`expiry`);");
     }
@@ -41,24 +43,28 @@ class SqliteTokenStorage implements ITokenStorage {
         $this->CleanExpired();
     }
 
-    function FlagToken($szToken) {
-        $hStatement = $this->hSqlite->prepare("UPDATE `tokens` SET `status` = :status WHERE `token` = :token;");
+    function FlagToken($szToken, $szIp) {
+        $hStatement = $this->hSqlite->prepare("UPDATE `tokens` SET `status` = :status, `ip` = :ip WHERE `token` = :token;");
         $hStatement->bindValue(":status", STATUS_FLAGGED);
+        $hStatement->bindValue(":ip", $szIp);
         $hStatement->bindValue(":token", $szToken);
         $hStatement->execute();
         $this->CleanExpired();
     }
 
     function RetrieveFlag($szToken) {
-        $hStatement = $this->hSqlite->prepare("SELECT `status` FROM `tokens` WHERE `token` = :token;");
+        $hStatement = $this->hSqlite->prepare("SELECT `status`, `ip` FROM `tokens` WHERE `token` = :token;");
         $hStatement->bindValue(":token", $szToken);
         $hResult = $hStatement->execute();
         $adwResult = $hResult->fetchArray(SQLITE3_NUM);
         $this->CleanExpired();
         if ($adwResult === false) {
-            return STATUS_NONEXISTENT;
+            return false;
         }
-        return intval($adwResult[0]);
+        $oResult = new \stdClass;
+        $oResult->status = intval($adwResult[0]);
+        $oResult->ip = $adwResult[1];
+        return $oResult;
     }
 }
 
