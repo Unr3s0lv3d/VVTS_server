@@ -7,15 +7,17 @@ use \VVTS\Classes\SqliteTokenStorage;
 $szBase = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http')
     . '://' . $_SERVER['HTTP_HOST'] . '/';
 
-/* RFC 8908 Captive Portal API — Android 12+, iOS 14+, Windows 11 */
+$szPortalUrlOverride = null;
+
+
 $szAccept = $_SERVER['HTTP_ACCEPT'] ?? '';
 if (strpos($szAccept, 'application/captive+json') !== false) {
     header('Content-Type: application/captive+json');
-    echo json_encode(['captive' => true, 'user-portal-url' => $szBase]);
+    echo json_encode(['captive' => true, 'user-portal-url' => $szPortalUrlOverride ?? $szBase]);
     exit;
 }
 
-/* Captive portal HTML pagina — getoond als er geen API parameters aanwezig zijn */
+
 if (!isset($_GET['create_token']) && !isset($_GET['query']) && !isset($_GET['flag'])) {
     date_default_timezone_set('Europe/Amsterdam');
 
