@@ -8,7 +8,159 @@ $szBase = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'h
     . '://' . $_SERVER['HTTP_HOST'] . '/';
 
 $szPortalUrlOverride = null;
+$szPortalConfigPath = sys_get_temp_dir() . '/vvts_portal_config.json';
+if (file_exists($szPortalConfigPath)) {
+    $oPortalConfig = @json_decode(file_get_contents($szPortalConfigPath));
+    if (is_object($oPortalConfig) && isset($oPortalConfig->portal_url)) {
+        $szPortalUrlOverride = $oPortalConfig->portal_url;
+    }
+}
 
+
+if (isset($_GET['start_proxy']) || isset($_GET['stop_proxy']) || isset($_GET['wpad']) || isset($_GET['configure_portal']) || isset($_GET['unconfigure_portal']) || isset($_GET['configure_wpad']) || isset($_GET['unconfigure_wpad'])) {
+    require_once dirname(__FILE__) . "/api_config.php";
+
+    if (isset($_GET['wpad'])) {
+        $szWpadPath = sys_get_temp_dir() . '/vvts_wpad.dat';
+        if (file_exists($szWpadPath)) {
+            header('Content-Type: application/x-ns-proxy-autoconfig');
+            echo file_get_contents($szWpadPath);
+        } else {
+            http_response_code(404);
+        }
+        exit;
+    }
+
+    header('Content-Type: application/json');
+
+    $szSecret = $_SERVER['HTTP_X_API_SECRET'] ?? '';
+    if ($szSecret !== API_SECRET) {
+        http_response_code(403);
+        echo json_encode(['error' => 'unauthorized']);
+        exit;
+    }
+
+    $szPortalConfigPath = sys_get_temp_dir() . '/vvts_portal_config.json';
+
+    if (isset($_GET['configure_portal'])) {
+        $szPortalUrl = $_GET['portal_url'] ?? null;
+        if ($szPortalUrl === null || !preg_match('/^https?:\/\/.+/', $szPortalUrl)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'portal_url is required and must be a valid http:// or https:// URL']);
+            exit;
+        }
+        file_put_contents($szPortalConfigPath, json_encode(['portal_url' => $szPortalUrl]));
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    if (isset($_GET['unconfigure_portal'])) {
+        if (file_exists($szPortalConfigPath)) {
+            unlink($szPortalConfigPath);
+        }
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    if (isset($_GET['configure_wpad'])) {
+        $szProxyHost = $_GET['proxy_host'] ?? null;
+        $szProxyPort = $_GET['proxy_port'] ?? null;
+        if ($szProxyHost === null || $szProxyPort === null) {
+            http_response_code(400);
+            echo json_encode(['error' => 'proxy_host and proxy_port are required']);
+            exit;
+        }
+        $szDirect = $_GET['direct'] ?? '';
+
+        $szPac = "function FindProxyForURL(url, host) {\n";
+        if ($szDirect !== '') {
+            foreach (array_filter(array_map('trim', explode(';', $szDirect))) as $szHost) {
+                if (strpos($szHost, '*') !== false) {
+                    $szPac .= "    if (shExpMatch(host, \"" . $szHost . "\")) return \"DIRECT\";\n";
+                } else {
+                    $szPac .= "    if (host == \"" . $szHost . "\") return \"DIRECT\";\n";
+                }
+            }
+        }
+        $szPac .= "    return \"PROXY " . $szProxyHost . ":" . intval($szProxyPort) . "\";\n";
+        $szPac .= "}\n";
+
+        file_put_contents(sys_get_temp_dir() . '/vvts_wpad.dat', $szPac);
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    if (isset($_GET['unconfigure_wpad'])) {
+        $szWpadPath = sys_get_temp_dir() . '/vvts_wpad.dat';
+        if (file_exists($szWpadPath)) {
+            unlink($szWpadPath);
+        }
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    $szSessionPath = sys_get_temp_dir() . '/vvts_proxy_session.json';
+
+    if (isset($_GET['start_proxy'])) {
+        if (file_exists($szSessionPath)) {
+            $oSession = json_decode(file_get_contents($szSessionPath));
+            if (posix_kill($oSession->pid, 0)) {
+                echo json_encode(['ok' => true]);
+                exit;
+            }
+            shell_exec("sudo /usr/local/bin/vvts-proxy-fw.sh close " . intval($oSession->port) . " 2>/dev/null");
+            unlink($szSessionPath);
+        }
+
+        $dwPort = rand(PROXY_PORT_MIN, PROXY_PORT_MAX);
+        $szPyPath = dirname(__FILE__) . '/proxy.py';
+        $szLogPath = sys_get_temp_dir() . '/vvts_proxy.log';
+        $szCmd = "setsid python3 " . escapeshellarg($szPyPath) . " " . $dwPort . " > " . escapeshellarg($szLogPath) . " 2>&1 & echo $!";
+        $dwPid = (int)shell_exec($szCmd);
+
+        $bStarted = false;
+        for ($i = 0; $i < 20; $i++) {
+            usleep(100000);
+            $hSock = @fsockopen("127.0.0.1", $dwPort, $errno, $errstr, 1);
+            if ($hSock !== false) {
+                fclose($hSock);
+                $bStarted = true;
+                break;
+            }
+        }
+
+        if (!$bStarted) {
+            http_response_code(500);
+            echo json_encode(['error' => 'proxy failed to start']);
+            exit;
+        }
+
+        shell_exec("sudo /usr/local/bin/vvts-proxy-fw.sh open " . intval($dwPort) . " 2>/dev/null");
+
+        $szWpad = "function FindProxyForURL(url, host) {\n    return \"PROXY " . $_SERVER['HTTP_HOST'] . ":" . $dwPort . "\";\n}\n";
+        file_put_contents(sys_get_temp_dir() . '/vvts_wpad.dat', $szWpad);
+
+        file_put_contents($szSessionPath, json_encode(['port' => $dwPort, 'pid' => $dwPid]));
+
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    if (isset($_GET['stop_proxy'])) {
+        if (file_exists($szSessionPath)) {
+            $oSession = json_decode(file_get_contents($szSessionPath));
+            posix_kill($oSession->pid, SIGTERM);
+            shell_exec("sudo /usr/local/bin/vvts-proxy-fw.sh close " . intval($oSession->port) . " 2>/dev/null");
+            unlink($szSessionPath);
+        }
+        $szWpadPath = sys_get_temp_dir() . '/vvts_wpad.dat';
+        if (file_exists($szWpadPath)) {
+            unlink($szWpadPath);
+        }
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+}
 
 $szAccept = $_SERVER['HTTP_ACCEPT'] ?? '';
 if (strpos($szAccept, 'application/captive+json') !== false) {
@@ -43,11 +195,11 @@ if (!isset($_GET['create_token']) && !isset($_GET['query']) && !isset($_GET['fla
     header('Content-Type: text/html; charset=utf-8');
     ?>
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mijn IP-adres</title>
+    <title>My IP address</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -127,7 +279,7 @@ if (!isset($_GET['create_token']) && !isset($_GET['query']) && !isset($_GET['fla
             <?php if ($ipv4): ?>
                 <span class="ip-value"><?= htmlspecialchars($ipv4) ?></span>
             <?php else: ?>
-                <span class="ip-none">Niet beschikbaar</span>
+                <span class="ip-none">Not available</span>
             <?php endif; ?>
         </div>
 
@@ -136,7 +288,7 @@ if (!isset($_GET['create_token']) && !isset($_GET['query']) && !isset($_GET['fla
             <?php if ($ipv6): ?>
                 <span class="ip-value v6"><?= htmlspecialchars($ipv6) ?></span>
             <?php else: ?>
-                <span class="ip-none">Niet beschikbaar</span>
+                <span class="ip-none">Not available</span>
             <?php endif; ?>
         </div>
 
@@ -144,20 +296,15 @@ if (!isset($_GET['create_token']) && !isset($_GET['query']) && !isset($_GET['fla
 
         <div class="meta">
             <div class="meta-item">
-                <p class="meta-label">Datum</p>
+                <p class="meta-label">Date</p>
                 <p class="meta-value"><?= $date ?></p>
             </div>
             <div class="meta-item">
-                <p class="meta-label">Tijd</p>
+                <p class="meta-label">Time</p>
                 <p class="meta-value"><?= $time ?></p>
             </div>
         </div>
 
-        <div class="divider"></div>
-
-        <button onclick="alert('JavaScript werkt!');" style="margin-top:.5rem;width:100%;padding:.75rem;background:#eeedfe;color:#3c3489;border:none;border-radius:12px;font-size:.95rem;font-weight:500;cursor:pointer;">
-            Test JavaScript
-        </button>
     </div>
 </body>
 </html>

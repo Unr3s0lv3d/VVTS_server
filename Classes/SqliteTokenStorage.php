@@ -27,7 +27,7 @@ class SqliteTokenStorage implements ITokenStorage {
     }
 
     function CleanExpired() {
-        $dwNow = intval(microtime(1) / 1000);
+        $dwNow = intval(microtime(1) * 1000);
         $hStatement = $this->hSqlite->prepare("DELETE FROM `tokens` where `expiry` < :now;");
         $hStatement->bindValue(":now", $dwNow);
         $hStatement->execute();
@@ -35,7 +35,7 @@ class SqliteTokenStorage implements ITokenStorage {
 
     function StoreToken($szToken, $dwLifetime) {
         $hStatement = $this->hSqlite->prepare("INSERT INTO `tokens` (`token`, `status`, `expiry`) VALUES (:token, :status, :expiry);");
-        $dwExpiry = intval(microtime(1) / 1000) + $dwLifetime;
+        $dwExpiry = intval(microtime(1) * 1000) + $dwLifetime;
         $hStatement->bindValue(":token", $szToken);
         $hStatement->bindValue(":status", STATUS_NOT_FLAGGED);
         $hStatement->bindValue(":expiry", $dwExpiry);
